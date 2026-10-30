@@ -1,265 +1,311 @@
 ---
 name: pdf-to-docx-epub
-description: Convert book-length PDFs into an editable, Word-compatible DOCX and a Kindle-friendly EPUB while preserving structure, notes, bibliography, index, figures, captions, metadata, and navigation. Use when a user asks for PDF-to-DOCX, PDF-to-EPUB, or a complete PDF book conversion workflow.
-compatibility: macOS with Python 3, Pandoc, Poppler, xmllint, unzip, and optionally Calibre or epubcheck.
+description: Convert book-length PDFs (monographs, edited volumes, scholarly books) into an editable Word DOCX with real footnotes and a reflowable EPUB 3 with pop-up footnotes, preserving headings, chapter authors, block quotations, italics and small caps, figures, bibliography and index. Use for PDF-to-DOCX, PDF-to-EPUB, DOCX-to-EPUB with working notes, or a complete PDF book conversion.
+compatibility: macOS or Linux with Python 3.9+ (standard library only), Pandoc 3.x, and Poppler (pdftohtml, pdftotext, pdftoppm). Optional - epubcheck, Calibre, LibreOffice, ocrmypdf for scanned PDFs.
 metadata:
   workflow: pdf-reconstruction-docx-epub
-  validation: structural-and-link-validation
+  validation: text-structure-footnote-and-package-validation
 ---
 
-# PDF book conversion: PDF to DOCX and EPUB
+# PDF book to DOCX and EPUB
 
-Use this skill for long, structured books. Treat the supplied PDF as the only source. Do not silently substitute another edition, search for a replacement, or discard pages that are difficult to extract.
+The PDF the user supplied is the only source. Never substitute another edition, never
+drop pages because they are hard to extract, and never call an output complete,
+"validated" or "perfect" until the gates in section 8 pass. If an application test
+(Word, Apple Books, Kindle Previewer) could not be run, say so.
 
-## Core rule
+## 0. Setup
 
-Do not call a file "complete", "Word-compatible", "Kindle-friendly", or "validated" until the relevant validation gates below have passed. If native Word or Calibre cannot be run, say so explicitly; do not claim that it was tested.
+`SKILL_DIR` below means the directory that contains this `SKILL.md`; set it first:
 
-## Tool choice: Pandoc versus Calibre
+```sh
+SKILL_DIR="/absolute/path/to/pdf-to-docx-epub"
+```
 
-The current official Calibre documentation makes the decision clear for this workflow:
+Requirements (macOS: `brew install pandoc poppler`; optional `brew install epubcheck`):
 
-- Calibre supports PDF, DOCX, and EPUB conversion, but its FAQ ranks PDF last among preferred source formats.
-- Calibre's PDF guidance says PDFs have fixed page size and text placement, making paragraph boundaries difficult to recover. It warns that complex, multi-column, and image-based PDFs are unsupported, that vector images and tables may not be extracted, and that PDF links and tables of contents are not supported.
-- Calibre is therefore not the primary PDF reconstruction tool for a scholarly book with running heads, footnotes, figures, bibliography, index, and a functional TOC.
-- Calibre is useful after semantic reconstruction: it can convert a clean DOCX/EPUB, generate device-specific formats such as AZW3, split oversized EPUB flows, inspect the book in its viewer, and perform optional polishing.
-- Pandoc is the better core engine here because the input to Pandoc is controlled semantic HTML. Its `--reference-doc` mechanism controls DOCX styles, and its `--css` mechanism controls EPUB styling.
+- Pandoc 3.x. Check `pandoc --version`. Pandoc 3.9+ no longer writes a number or a
+  back link inside EPUB notes; `polish_epub.py` restores both, so always run it.
+- Poppler: `pdfinfo`, `pdffonts`, `pdftohtml`, `pdftotext`, `pdftoppm`, `pdfimages`.
+- Python 3 standard library only. Use a scratch working directory for each book.
 
-Recommended pipeline:
+Pipeline:
 
 ```text
-PDF -> positioned PDF XML -> reconstructed semantic HTML
-    -> Pandoc + XML-aware style pass -> DOCX
-    -> Pandoc + CSS + EPUB polish -> EPUB
-    -> optional Calibre inspection/polish/device conversion
+PDF ──pdf_to_html.py──> book.html (semantic, notes as epub:type) ──check_text.py (vs PDF)
+book.html ──pandoc──> raw.docx ──format_docx.py──> final.docx ──validate_docx.py
+book.html ──pandoc──> raw.epub ──polish_epub.py──> book.epub ──validate_epub.py + epubcheck
+(final.docx edited by the user ──pandoc -f docx+styles──> EPUB ──polish_epub.py──> same result)
 ```
 
-Do not replace the reconstruction stage with `ebook-convert input.pdf output.docx` merely because Calibre can technically perform that conversion.
+Why Pandoc and not `ebook-convert book.pdf`: Calibre's own manual ranks PDF last as an
+input format; it cannot recover paragraphs, notes, links or the TOC from a book PDF.
+Calibre is useful afterwards (viewer, AZW3, Check Book), not for reconstruction.
 
-Official references:
-
-- Calibre conversion guidance: https://manual.calibre-ebook.com/en/conversion.html
-- Calibre FAQ and supported formats: https://manual.calibre-ebook.com/en/faq.html
-- Calibre `ebook-convert` options: https://manual.calibre-ebook.com/generated/en/ebook-convert.html
-- Pandoc User's Guide: https://pandoc.org/MANUAL.html
-
-## 1. Establish the workspace and exact source
-
-Use a project directory under the user's home directory and keep temporary extraction under `/tmp` or another disposable directory. Resolve the absolute source path before processing it.
-
-Record:
-
-- exact source PDF path;
-- page count;
-- encryption status;
-- whether text is extractable;
-- whether images and fonts are available;
-- output paths;
-- commands and validation results.
-
-For a local PDF, inspect it first:
+## 1. Inspect the PDF
 
 ```sh
-pdfinfo "$PDF"
-pdftotext "$PDF" /tmp/book-plain.txt
+pdfinfo book.pdf
+pdffonts book.pdf
+pdftotext -layout -f 15 -l 16 book.pdf - | head -80
+pdftoppm -png -r 80 -f 15 -l 16 book.pdf page    # look at the pages themselves
 ```
 
-Do not use a plain text dump as the reconstruction source when layout matters. It is only a comparison and diagnostics source.
+Record the page count, encryption, the pages of the cover, half-title, series page,
+title page, copyright page, printed contents and list of illustrations, and how notes,
+running heads and chapter openings look.
 
-## 2. Reconstruct semantic HTML from positioned PDF XML
+- No text layer (`pdftotext` returns nothing on most pages): run OCR first
+  (`ocrmypdf -l eng+spa book.pdf ocr.pdf`), then work from `ocr.pdf`.
+- Fonts with `uni no` or `Custom` encoding, or a PDF re-saved by macOS Preview
+  ("Quartz PDFContext" producer), often extract as garbage (section 3).
 
-For a book-length PDF, prefer `pdftohtml -xml` and a Python reconstruction pass over a single `pdftotext` conversion. The reconstruction should preserve:
-
-- title page and publisher information;
-- contributors and acknowledgements;
-- abbreviations;
-- chapter and subsection hierarchy;
-- italics and superscripts;
-- body paragraphs and block quotations;
-- footnotes and their numbering;
-- figures, captions, and image-disclaimer text;
-- bibliography and its subdivisions;
-- index entries;
-- trailing source fragments rather than silently dropping them.
-
-Keep the source HTML semantic. Use `h1`, `h2`, and `h3` for hierarchy, `p` for paragraphs, `blockquote` for quotations, `figure`/`figcaption` for figures, and an ordered list for notes.
-
-### Paragraph typography
-
-The book convention is:
-
-- first paragraph after a chapter or subsection heading: no first-line indent;
-- first prose paragraph after a chapter author line: no first-line indent;
-- later body paragraphs: first-line indent;
-- block quotations, front matter, bibliography, index, captions, and notes: no ordinary body indent.
-
-Mark the first prose paragraphs in the source HTML with `class="noindent"`. Do not rely on arbitrary paragraph classes surviving Pandoc's EPUB writer; the DOCX formatter and EPUB CSS must also enforce the rule independently.
-
-### Footnotes are a hard requirement
-
-Never leave a footnote marker as a bare `<sup>1</sup>`. It is not usable in an EPUB.
-
-For every body reference, create a unique, chapter-prefixed link:
-
-```html
-<a class="noteref" href="#chapter-1-note-1" id="chapter-1-ref-1"><sup>1</sup></a>
-```
-
-Give every note a target and a return link:
-
-```html
-<li id="chapter-1-note-1">
-  <span class="note-number">1.</span> Note text.
-  <a class="noteback" href="#chapter-1-ref-1">↩</a>
-</li>
-```
-
-Prefix IDs with a chapter or section identifier because note numbers normally restart in every chapter. Check footnotes printed in chapter titles as well as those printed in body paragraphs. A note with no body reference is a reconstruction defect unless the PDF proves it is intentionally unreferenced.
-
-## 3. Build the DOCX safely
-
-Generate the first DOCX with Pandoc:
+## 2. Reconstruct the HTML
 
 ```sh
-pandoc book.html \
-  --from=html \
-  --to=docx \
-  --toc \
-  --toc-depth=2 \
-  --metadata title="BOOK TITLE" \
-  --metadata author="AUTHOR OR EDITOR" \
-  --metadata lang="en-GB" \
-  -o raw.docx
+python3 "$SKILL_DIR/scripts/pdf_to_html.py" --print-config > config.json   # then edit
+python3 "$SKILL_DIR/scripts/pdf_to_html.py" --pdf book.pdf --out book.html \
+  --config config.json --media media
 ```
 
-Then apply only a controlled style pass. Use the bundled `scripts/format_docx.py` when available:
+It reads Poppler's positioned XML and writes `book.html` plus `book.report.json`.
+It measures the body, note and quotation sizes, margins, indent and line pitch, then:
+removes running heads, folios and printer slugs; reads two-column pages (indexes) column
+by column; joins paragraphs across lines and pages; repairs line-end hyphenation from the
+book's own vocabulary (keeping "Quispe-Agnoli", "Anglo-Norman"); restores spaces lost at
+font changes and after note markers; rejoins drop caps; detects chapters (with their
+"Chapter 1" label), sections (including small-caps and wrapped headings) and chapter
+authors; reads footnotes from the foot of each page, including notes continued on the
+next page, and links each to its marker; builds block quotations, bibliography and
+abbreviation lists (hanging indents), index entries, figures with captions and front
+matter; detects small-caps fonts; skips printed contents pages.
+
+Config keys you will use most:
+
+| key | use |
+|---|---|
+| `lang`, `title` | language (drives hyphenation in readers) and HTML title |
+| `skip_pages` | cover, half-title, series page, title page (Pandoc makes its own title page), blank pages |
+| `toc_pages` | printed contents pages, if not auto-detected (they are always skipped) |
+| `front_matter_until` | last PDF page of front matter, if the guess is wrong |
+| `font_maps` | per-font character maps for garbled fonts (section 3) |
+| `smallcaps_fonts`, `heading_fonts` | force a font to small caps, or to heading level N (`"FAMILY@SIZE": 2`) |
+| `body_size`, `note_size`, `quote_sizes`, `header_band`, `footer_band` | override measurements |
+| `keep_hyphen_words`, `hanging_sections` | real compounds split at a line end; extra hanging-indent sections |
+
+### Review loop (mandatory)
+
+Read the summary it prints and `book.report.json`, fix the config, re-run, until clean:
+
+1. `suspect_fonts`, `mixed_script_words`: garbled text; go to section 3.
+2. `headings`: compare with the printed contents page, level by level.
+3. `chapter_authors`, `display_text`, `removed_margin_text`, `margin_lines`: nothing of
+   the book proper may be in the removed lists.
+4. `notes`: `linked` must equal `found`; every `note_problems` entry must be resolved
+   (a marker the script missed, a note continued oddly, a page wrongly treated as notes).
+5. `hyphen_guessed`: line-end hyphens removed without evidence; add real compounds to
+   `keep_hyphen_words`.
+6. `figures`, `images_skipped`, `two_column_pages`, `toc_pages_skipped`, `skipped_pages`.
+
+Then compare with the PDF's own text layer:
 
 ```sh
-python3 "$SKILL_DIR/scripts/format_docx.py" \
-  --docx raw.docx \
-  --html book.html \
-  --out final.docx
+python3 "$SKILL_DIR/scripts/check_text.py" --pdf book.pdf --html book.html
 ```
 
-The style pass must:
+It must exit 0: no GLUED words, no NOTE MARKERS followed by a letter, and every
+UNEXPLAINED word inspected on its PDF page (it lists the pages). Differences explained
+by running heads, folios, decoded fonts and pdftotext's own hyphen removal are fine.
+Finally spot-check a chapter opening, a page with a long note, a block quotation and the
+end of a chapter against `pdftoppm` renders.
 
-- set `BodyText` to a 360-twip (0.25-inch) first-line indent;
-- set `FirstParagraph` to `w:firstLine="0"` so it overrides `BodyText` inheritance;
-- assign `FirstParagraph` to the first prose paragraph after `Heading1`/`Heading2` and after a chapter author line;
-- leave later body paragraphs as `BodyText`;
-- keep front matter, bibliography, index, captions, and quotations in their appropriate no-indent styles;
-- preserve all hyperlinks and text.
+## 3. Garbled fonts
 
-### DOCX failure that must not recur
+Subset fonts with a custom encoding often extract as a substitution cipher: "C(p;+&l% <"
+for "Capítulo 1", "93ii" for small-caps "xvii", "λὺρφίάφ" for Greek εὐνοῦχος, "/e" for a
+"Th" ligature. Each font is consistent, so it is repaired per font:
 
-Do not insert Word XML with broad regular expressions. In particular:
+1. The report's `suspect_fonts` lists each font's characters and every distinct run with
+   its page. Render those pages (`pdftoppm -png -r 150 -f N -l N book.pdf p`) and read
+   the real text from the image.
+2. Write pairs of equal length and derive the map:
 
-- `w:pageBreakBefore` must not be inserted before `w:pStyle`; that element order makes Word reject the document;
-- do not append `w:updateFields` at an arbitrary location in `settings.xml`;
-- do not add a footer unless its relationship, content-type override, and section reference are all added in valid order;
-- do not patch an already-patched DOCX repeatedly.
+   ```json
+   [{"font": "AAAAAE+StempelGaramondLTStd", "garbled": "(p;+&l% <", "text": "apítulo 1"},
+    {"font": "AAAAAE+StempelGaramondLTStd", "garbled": "93ii", "text": "xvii"}]
+   ```
 
-The safest default is a clean Pandoc DOCX with a Pandoc TOC field and a minimal, XML-aware style pass. Do not add page-number footers merely for appearance if they risk package validity.
+   ```sh
+   python3 "$SKILL_DIR/scripts/pdf_to_html.py" --pdf book.pdf --out x \
+     --font-map-pairs pairs.json        # prints {"font_maps": ...}; merge into config.json
+   ```
 
-## 4. Build the EPUB safely
+3. Re-run until the font is no longer suspect and every character in its `chars` list is
+   mapped. Never guess a character you have not seen on the page. `mixed_script_words`
+   ("eunμchus") catches single wrong characters inside otherwise normal words.
 
-Create an EPUB input HTML without the cover image if the cover will be passed separately to Pandoc. This avoids duplicate cover/title-page content.
+If the user still has the original publisher PDF, compare one heading: a copy made with
+macOS Preview "Export as PDF" can lose correct text that the original still has.
+
+## 4. The HTML contract
+
+`book.html` is the single source for both outputs. Keep this markup when you edit it:
+
+- One `<h1>` per chapter, preface, introduction, bibliography or index: Pandoc starts a
+  new EPUB file and (via `format_docx.py`) a new Word section at each `<h1>`, and note
+  numbers restart there. Label and title stay in one heading:
+  `<h1 id="ch03"><span class="chapter-label">Chapter 1</span><br />Raised Voices</h1>`.
+  Sections are `<h2>`/`<h3>`; add `class="unlisted"` to keep one out of the TOC.
+- Footnotes are the hard requirement. Each marker is a link, each note an aside; the
+  note may sit anywhere in the same file and may hold several paragraphs:
+
+  ```html
+  ... text.<a epub:type="noteref" href="#ch03-n12">12</a> Next sentence ...
+  <aside epub:type="footnote" id="ch03-n12"><p>Note text.</p></aside>
+  ```
+
+  The link text is the printed label ("12", "*"); IDs are unique in the file. Pandoc,
+  reading with `--from=html+epub_html_exts`, turns these into real Word footnotes and
+  EPUB notes. Never leave a bare `<sup>12</sup>`; a superscript that is not a note
+  (siglum W², exponent) is wrapped as `<span class="not-a-note"><sup>2</sup></span>`.
+- Paragraph roles are `<div>` wrappers, because Pandoc drops classes on `<p>`; the
+  `data-custom-style` value becomes the Word paragraph style and the class styles the EPUB:
+
+  | class | data-custom-style | for |
+  |---|---|---|
+  | `noindent` | `First Paragraph` | flush first paragraph not after a heading, continuation after a quote |
+  | `indent` | `Body Text` | indented new paragraph after a block quotation |
+  | `chapter-author` | `Chapter Author` | contributor's name under a chapter title |
+  | `bibliography` | `Bibliography` | hanging-indent entries (also abbreviation lists) |
+  | `index`, `index-sub`, `index-letter` | `Index Entry`, `Index Subentry`, `Index Letter` | index |
+  | `epigraph`, `epigraph-source`, `dedication` | `Epigraph`, `Epigraph Source`, `Dedication` | front matter, chapter openings |
+  | `centered`, `right`, `front-matter` | `Centered`, `Right`, `Front Matter` | title, copyright and other front matter |
+
+- `<blockquote><p>` for quotations, `<figure><img alt="..." /><figcaption>` for figures,
+  `<i>`/`<b>`, `<span class="smallcaps">` for small caps (body text keeps the lowercase
+  letters the font set as small capitals).
+
+## 5. Metadata and cover
+
+Write `metadata.yaml` from the title page and its verso, in the book's language:
+
+```yaml
+---
+title: Castration and Culture in the Middle Ages
+subtitle: (if any)
+author: Larissa Tracy (ed.)
+publisher: D. S. Brewer
+date: 2013
+lang: en-GB
+identifier:
+  - scheme: ISBN-13
+    text: 978-1-84384-351-1
+rights: © Contributors 2013
+toc-title: Contents
+---
+```
+
+Cover: prefer the publisher's cover file. Otherwise render the cover page and crop the
+front panel if page 1 is a spread (look at the render first):
+`pdftoppm -jpeg -jpegopt quality=90 -r 200 -f 1 -l 1 [-x X -y Y -W W -H H] -singlefile book.pdf cover`.
+Do not pass an image extracted by `pdfimages`/`pdftohtml` directly: those JPEGs often
+lack a JFIF header and Pandoc cannot read their size. Aim for at least 1400 px wide.
+
+## 6. DOCX
 
 ```sh
-pandoc book-epub.html \
-  --from=html \
-  --to=epub3 \
-  --toc \
-  --toc-depth=2 \
-  --css=assets/epub.css \
-  --epub-cover-image=assets/cover-front.jpg \
-  --resource-path=. \
-  --metadata title="BOOK TITLE" \
-  --metadata author="AUTHOR OR EDITOR" \
-  --metadata lang="en-GB" \
-  -o book.epub
+pandoc book.html --from=html+epub_html_exts --to=docx --toc --toc-depth=2 \
+  --metadata-file=metadata.yaml --resource-path=. -o raw.docx
+python3 "$SKILL_DIR/scripts/format_docx.py" --docx raw.docx --out final.docx --source book.html
+python3 "$SKILL_DIR/scripts/validate_docx.py" --docx final.docx --source book.html
 ```
 
-After Pandoc, run the bundled EPUB polish pass:
+`format_docx.py` never edits the input. It sets Body Text to a 0.25 in first-line indent
+with no paragraph spacing, unindents First Paragraph and every style built on Body Text,
+gives the book styles their indents (hanging bibliography, Chicago-style index), sets
+footnotes to 10 pt, starts every chapter on a new page in its own section, restarts note
+numbers per chapter when the source does (`--note-restart auto|chapter|never`), and turns
+symbol labels such as "*" into Word custom marks. It parses and re-serialises each part
+with its original namespace declarations and inserts elements in schema order, so it is
+safe with a Word-made `--reference-doc`. Pandoc's TOC field is marked dirty: Word fills
+it on opening.
+
+LibreOffice shows custom marks twice in the note area and cannot render per-chapter note
+restarts written per section, which is why the restart is declared document-wide; Word
+honours it. Test in Word when available; otherwise say it was not tested.
+
+## 7. EPUB
 
 ```sh
-python3 "$SKILL_DIR/scripts/polish_epub.py" --epub book.epub
+pandoc book.html --from=html+epub_html_exts --to=epub3 --toc --toc-depth=2 --split-level=1 \
+  --css="$SKILL_DIR/assets/epub.css" --epub-cover-image=cover.jpg \
+  --metadata-file=metadata.yaml --resource-path=. -o raw.epub
+python3 "$SKILL_DIR/scripts/polish_epub.py" --epub raw.epub --out book.epub --source book.html
+python3 "$SKILL_DIR/scripts/validate_epub.py" --epub book.epub --source book.html
+epubcheck book.epub        # or: --epubcheck /path/to/epubcheck.jar on the line above
 ```
 
-### EPUB CSS rules learned from Calibre
+`polish_epub.py` makes notes work everywhere: every marker is `<sup>` inside
+`<a epub:type="noteref" role="doc-noteref">`, every note is an
+`<aside epub:type="footnote" role="doc-footnote">` that starts with its label linked back
+to the marker. Apple Books, Kobo, Thorium and Kindle (Send to Kindle) show these as
+pop-ups; readers without pop-ups jump to the note at the end of the chapter and back.
+With `--source`, the labels are the printed ones (per-chapter or continuous numbering,
+"*"). It also removes Pandoc's empty `<style>` elements, gives chapter files real titles
+and keeps `mimetype` first and uncompressed. `assets/epub.css` is a reflowable book
+stylesheet (indents, no paragraph spacing, hyphenation, small-caps sections, notes,
+hanging bibliography, index) that leaves font and size to the reader and passes
+Calibre's stylelint rules; adapt it per book if the user asks.
 
-- Use `text-indent: -1.2em` plus `padding-left: 1.2em` for hanging bibliographic entries. Never use the nonstandard `hanging-indent` property.
-- Keep generic selectors before more specific selectors. Calibre's stylelint checks `no-descending-specificity` and reports otherwise harmless-looking order errors.
-- Pandoc may emit an empty inline `<style></style>` element into every XHTML file. Remove empty style elements after conversion. Calibre reports this misleadingly as `Unexpected empty source` at line 1 of each file.
-- Keep the external stylesheet linked after removing the empty inline style block.
-- Preserve footnote `href` links and target IDs through the Pandoc conversion.
-
-## 5. Validation gates
-
-### DOCX gate
-
-Run all of these before handoff:
+From an edited DOCX (when the user corrects the Word file and wants a new EPUB):
 
 ```sh
-unzip -t final.docx
-rm -rf /tmp/docx-check && mkdir /tmp/docx-check
-unzip -q final.docx -d /tmp/docx-check
-find /tmp/docx-check -type f \( -name '*.xml' -o -name '*.rels' \) -print0 |
-  xargs -0 -n1 xmllint --noout
+pandoc final.docx --from=docx+styles --to=epub3 --toc --toc-depth=2 --split-level=1 \
+  --css="$SKILL_DIR/assets/epub.css" --epub-cover-image=cover.jpg \
+  --metadata-file=metadata.yaml -o raw.epub
+python3 "$SKILL_DIR/scripts/polish_epub.py" --epub raw.epub --out book.epub   # [--numbering continuous]
 ```
 
-Also verify:
+Word footnotes become EPUB notes, Word styles become the same classes, and custom marks
+("*") are recovered; without `--source` numbering restarts in every chapter unless
+`--numbering continuous`.
 
-- every relationship target exists;
-- there is exactly one intended `word/document.xml` and no accidental duplicate footer parts;
-- `BodyText` has the intended indent and `FirstParagraph` overrides it with zero indent;
-- the TOC field exists;
-- plain-text extraction from DOCX matches the reconstructed source after accounting only for generated TOC text and navigation-only link labels;
-- no PDF running heads, page labels, or extraction artefacts have leaked into the body.
+## 8. Validation gates
 
-If Microsoft Word is installed, perform a native open-and-close test. If the environment blocks GUI automation, report that limitation instead of claiming a Word test.
+Report exactly which of these ran:
 
-### EPUB gate
+1. `pdf_to_html.py` report reviewed: no suspect fonts left, notes linked = found, no
+   unresolved note problems, headings match the printed contents.
+2. `check_text.py` exits 0.
+3. `validate_docx.py` exits 0 (ZIP, XML, content types, relationships, mc:Ignorable
+   prefixes, schema order, footnotes vs source, bookmarks, TOC field, text vs source).
+4. `validate_epub.py` exits 0 (package, metadata, links, notes in both directions,
+   labels, no bare superscript markers, no note markers in the TOC, text vs source).
+5. `epubcheck` reports 0 errors. It does not check notes: gates 1-4 do.
+6. A look at the result: render a chapter opening and its notes (Calibre viewer, Apple
+   Books, Kindle Previewer, or a browser on the unzipped XHTML), and open the DOCX in
+   Word if available.
 
-Run:
+## 9. Known problems and fixes
 
-```sh
-unzip -t book.epub
-```
-
-Then verify:
-
-- the first ZIP entry is an uncompressed `mimetype` containing exactly `application/epub+zip`;
-- every XHTML/XML file passes `xmllint --noout`;
-- no XHTML file contains an empty inline `<style>` block;
-- the stylesheet contains no `hanging-indent` property;
-- Calibre's CSS linter produces zero warnings when Calibre is available;
-- every `noteref` link resolves to a note target in the correct XHTML file;
-- every note has a return link, and every note target has at least one incoming body/title reference;
-- the EPUB navigation document is listed in the OPF with `properties="nav"`;
-- the cover is declared as a cover image and the cover XHTML exists;
-- all figures and referenced image assets exist.
-
-Use `scripts/validate_epub.py` for the structural/link checks when available. `epubcheck` is an optional additional gate; it does not replace the footnote-link audit.
-
-## 6. Calibre error map
-
-| Calibre message | Actual cause | Required fix |
+| Symptom | Cause | Fix |
 |---|---|---|
-| `Unexpected empty source` on every XHTML file | Empty inline `<style></style>` emitted by the converter | Remove empty style elements; keep the external stylesheet link |
-| `Expected selector "p" to come before selector ".cover-copy p"` | CSS specificity order | Move generic `p` before more specific selectors |
-| `Expected selector "h1 + p" ...` | CSS specificity order | Order type-only structural rules before class/ID rules |
-| `Expected selector "blockquote p" ...` | Same specificity-order lint | Put `blockquote p` before the other `... p` structural rules |
-| `Unexpected unknown property "hanging-indent"` | Nonstandard CSS property | Use negative `text-indent` and matching `padding-left` |
-| body superscript does not open a note | Bare `<sup>` with no `href` | Add a noteref anchor, note target, and return link |
+| Headings or words like "C(p;+&l%", "93ii", "/e" | font without a usable Unicode map | section 3 |
+| Notes missing or merged | notes and quotes share a size, unusual note numbering | check `note_problems`; set `note_size`/`quote_sizes` |
+| "word³Next" or "hijirasof" | space lost at a marker or font change | fixed by the script; `check_text.py` reports any left |
+| Paragraph split after a chapter opening | drop cap | handled; check the report and the first paragraph |
+| Index read across columns | two-column page not detected | `two_column_pages`; set `skip_pages` or fix by hand |
+| Bibliography entry per line | heading not recognised as bibliography | add its text to `hanging_sections` |
+| Vector figures missing | `pdftohtml` extracts raster images only | render the area with `pdftoppm -x -y -W -H` and insert a `<figure>` |
+| Tables flattened into paragraphs | no table reconstruction | rebuild as `<table>` by hand |
+| Index page numbers meaningless | reflowable EPUB has no pages | keep (fidelity) or drop the index on the user's instruction |
+| Calibre "Unexpected empty source" | empty `<style>` from Pandoc | `polish_epub.py` |
+| Calibre "Expected selector ... to come before" | CSS specificity order | keep generic selectors first, as `assets/epub.css` does |
+| Calibre "unknown property hanging-indent" | non-standard CSS | negative `text-indent` + `padding-left` |
+| Word "unreadable content" | XML edited with regex or ElementTree dropping namespaces | only `format_docx.py`; `validate_docx.py` checks |
 
-## 7. Final response
+## 10. Final response
 
-Give the user:
-
-- the final DOCX path;
-- the final EPUB path;
-- a short list of validations that actually ran;
-- any native-application test that could not run.
-
-Do not claim a file is perfect based only on `unzip -t`. Package integrity, XML validity, text order, styles, navigation, and footnote link resolution are separate checks.
+Give the DOCX and EPUB paths, the gates that ran and their results, what could not be
+tested, and anything that needs the user's eye (decoded fonts, unresolved notes, figures
+or tables rebuilt by hand, pages deliberately skipped).

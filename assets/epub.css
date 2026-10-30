@@ -1,0 +1,325 @@
+/* Book stylesheet for the pdf-to-docx-epub skill (EPUB 3, reflowable).
+ *
+ * Rules:
+ * - no font-family, font-size or colour on body text: the reader's settings
+ *   (and night modes) stay in control;
+ * - selectors are ordered from least to most specific for every element they
+ *   end in, which keeps Calibre's stylelint (no-descending-specificity) quiet;
+ * - only standard properties plus the -webkit-/-epub- hyphenation prefixes;
+ *   hanging indents use a negative text-indent with a matching padding-left.
+ * Class names match the reconstructed HTML and the slugs that polish_epub.py
+ * adds for Word styles (Chapter Author -> .chapter-author, and so on).
+ */
+
+/* ---------- Page and paragraphs ---------- */
+
+body {
+  margin: 0;
+  padding: 0;
+  orphans: 2;
+  widows: 2;
+}
+
+p {
+  margin: 0;
+  text-indent: 1.5em;
+  text-align: justify;
+  -webkit-hyphens: auto;
+  -epub-hyphens: auto;
+  hyphens: auto;
+}
+
+/* ---------- Headings ---------- */
+
+h1,
+h2,
+h3,
+h4 {
+  font-weight: normal;
+  text-align: left;
+  line-height: 1.25;
+  -webkit-hyphens: none;
+  -epub-hyphens: none;
+  hyphens: none;
+  page-break-after: avoid;
+  break-after: avoid;
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+
+h1 {
+  font-size: 1.6em;
+  margin: 2.5em 0 1.75em 0;
+}
+
+h2 {
+  font-size: 1.15em;
+  font-variant: small-caps;
+  letter-spacing: 0.03em;
+  margin: 2em 0 1em 0;
+}
+
+h3 {
+  font-size: 1em;
+  font-style: italic;
+  margin: 1.75em 0 0.75em 0;
+}
+
+h4 {
+  font-size: 1em;
+  margin: 1.5em 0 0.5em 0;
+}
+
+h1 + p,
+h2 + p,
+h3 + p,
+h4 + p {
+  text-indent: 0;
+}
+
+/* ---------- Inline ---------- */
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+sup,
+sub {
+  font-size: 0.75em;
+  line-height: 0;
+}
+
+sup {
+  vertical-align: super;
+}
+
+sub {
+  vertical-align: sub;
+}
+
+/* ---------- Figures ---------- */
+
+figure {
+  margin: 1.5em 0;
+  text-align: center;
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+
+img {
+  max-width: 100%;
+  height: auto;
+}
+
+figcaption {
+  font-size: 0.85em;
+  text-align: center;
+  margin-top: 0.5em;
+}
+
+figcaption p {
+  text-indent: 0;
+  text-align: center;
+}
+
+/* ---------- Block quotations ---------- */
+
+blockquote {
+  margin: 1em 0 1em 1.5em;
+  font-size: 0.92em;
+}
+
+blockquote p {
+  text-indent: 0;
+}
+
+blockquote p + p {
+  text-indent: 1.5em;
+}
+
+/* ---------- Tables ---------- */
+
+table {
+  border-collapse: collapse;
+  margin: 1em auto;
+  font-size: 0.9em;
+}
+
+th,
+td {
+  padding: 0.2em 0.5em;
+  vertical-align: top;
+  text-align: left;
+}
+
+/* ---------- Notes area rule ---------- */
+
+hr {
+  border: 0;
+  border-top: 1px solid;
+  width: 30%;
+  margin: 1.5em auto;
+}
+
+/* ---------- Classes from the reconstruction (and Word style slugs) ---------- */
+
+.smallcaps {
+  font-variant: small-caps;
+}
+
+.chapter-label {
+  font-size: 0.62em;
+  font-variant: small-caps;
+  letter-spacing: 0.08em;
+}
+
+.chapter-author {
+  margin: 0 0 2em 0;
+}
+
+.epigraph {
+  margin: 0 0 2em 25%;
+}
+
+.noindent p,
+.first-paragraph p {
+  text-indent: 0;
+}
+
+.chapter-author p {
+  text-indent: 0;
+  font-style: italic;
+  text-align: left;
+}
+
+.epigraph p {
+  text-indent: 0;
+  font-style: italic;
+  text-align: left;
+}
+
+.epigraph-source p {
+  text-indent: 0;
+  font-style: normal;
+  text-align: right;
+}
+
+.centered p {
+  text-indent: 0;
+  text-align: center;
+}
+
+.right p {
+  text-indent: 0;
+  text-align: right;
+}
+
+.dedication p {
+  text-indent: 0;
+  text-align: center;
+  font-style: italic;
+  margin-top: 20%;
+}
+
+.copyright p,
+.front-matter p {
+  text-indent: 0;
+  text-align: left;
+  font-size: 0.85em;
+  margin-bottom: 0.5em;
+}
+
+.bibliography p {
+  text-indent: -1.5em;
+  padding-left: 1.5em;
+  text-align: left;
+  margin-bottom: 0.35em;
+}
+
+.index p {
+  text-indent: -2em;
+  padding-left: 2em;
+  text-align: left;
+}
+
+.index-sub p {
+  text-indent: -1em;
+  padding-left: 2em;
+}
+
+.index-letter p {
+  text-indent: 0;
+  padding-left: 0;
+  margin-top: 1em;
+  font-weight: bold;
+}
+
+/* ---------- Pandoc title page ---------- */
+
+.titlepage {
+  margin-top: 20%;
+  text-align: center;
+}
+
+.titlepage p {
+  text-indent: 0;
+  text-align: center;
+}
+
+h1.title {
+  font-size: 2em;
+  text-align: center;
+  margin: 0 0 0.5em 0;
+}
+
+/* ---------- Notes (Pandoc markup normalised by polish_epub.py) ---------- */
+
+a.footnote-ref,
+a.footnote-back {
+  text-decoration: none;
+}
+
+a.footnote-ref sup {
+  font-size: 0.7em;
+  vertical-align: super;
+}
+
+section.footnotes {
+  margin-top: 2.5em;
+  font-size: 0.85em;
+}
+
+section.footnotes hr {
+  margin: 0 0 1em 0;
+}
+
+aside.footnote {
+  margin: 0 0 0.6em 0;
+}
+
+aside.footnote p {
+  text-indent: 0;
+  text-align: left;
+}
+
+aside.footnote p + p {
+  text-indent: 1.5em;
+}
+
+/* ---------- Navigation document ---------- */
+
+nav#toc ol,
+nav#landmarks ol {
+  list-style-type: none;
+  margin: 0 0 0 1em;
+  padding: 0;
+}
+
+nav#toc li {
+  margin: 0.35em 0;
+}
+
+nav#toc a {
+  text-decoration: none;
+}

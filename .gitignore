@@ -29,3 +29,7 @@ __pycache__/
 # Editor and OS metadata
 .idea/
 .vscode/
+
+# Reconstruction reports and working files
+*.report.json
+media/
