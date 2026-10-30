@@ -1,0 +1,31 @@
+# Conversion outputs and source material
+*.pdf
+*.docx
+*.epub
+*.html
+*.xhtml
+*.txt
+*.xml
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.tif
+*.tiff
+
+# Temporary and local validation output
+.tmp/
+tmp/
+output/
+build/
+.cache/
+.DS_Store
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Editor and OS metadata
+.idea/
+.vscode/
