@@ -73,7 +73,9 @@ def pdf_pages(pdf: Path, first: int | None, last: int | None) -> list[tuple[int,
     pages = []
     for offset, page in enumerate(text.split('\f')):
         page = unicodedata.normalize('NFC', page.replace('­\n', '').replace('­', ''))
-        page = re.sub(r'(\w)-\n([a-zà-ÿ])', r'\1\2', page)  # "Sala-\nMolins" keeps its hyphen
+        # "Sala-\nMolins" keeps its hyphen; a margin number may sit between the halves
+        number = r'(?:\d{1,4}[a-z]?|[IVXLC]{1,6})(?:/\S+)?'
+        page = re.sub(rf'(\w)-(?:[ \t]+{number})?[ \t]*\n(?:[ \t]*{number}[ \t]*\n)*([a-zà-ÿ])', r'\1\2', page)
         page = re.sub(r'\b([^\W\d]{3,})\d{1,3}\b', r'\1', page)  # note markers glued to words: "Nubian37"
         page = re.sub(r'[ﬀ-ﬆ]', lambda m: {'ﬀ': 'ff', 'ﬁ': 'fi', 'ﬂ': 'fl', 'ﬃ': 'ffi',
                                                      'ﬄ': 'ffl', 'ﬅ': 'st', 'ﬆ': 'st'}[m.group(0)], page)
@@ -141,8 +143,17 @@ def main() -> None:
         else:
             unexplained[word] = count
     # Two common PDF words fused in the HTML ("nubianmethod") are a lost space.
+    # Not numbers (a year before a note marker: pdftotext reads "19501"), and
+    # not the halves of a compound the HTML rightly keeps ("good-humoured",
+    # which pdftotext joined at the line end).
+    in_compounds = collections.defaultdict(set)
+    for compound in re.findall(r'\w+(?:-\w+)+', html_text.lower()):
+        for part in compound.split('-'):
+            in_compounds[part].add(compound.replace('-', ''))
     glued = collections.Counter()
     for word, count in extra.items():
+        if word.isdigit() or any(pdf_words[joined] for joined in in_compounds.get(word, ())):
+            continue
         for cut in range(2, len(word) - 1):
             head, tail = word[:cut], word[cut:]
             if pdf_words[head] >= 2 and pdf_words[tail] >= 2 and not pdf_words[word]:

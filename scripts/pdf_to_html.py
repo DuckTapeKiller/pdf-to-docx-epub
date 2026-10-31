@@ -520,8 +520,21 @@ def _group(page_no: int, runs: list[Run]) -> list[Line]:
         best = None
         for line in lines[-6:]:
             main = line.main_runs()
-            top = min(r.top for r in main)
-            bottom = max(r.bottom for r in main)
+            # the height of most of the line's letters (not of a lone tall run)
+            weights = collections.Counter()
+            for r in main:
+                weights[r.height] += max(1, len(r.text.strip()))
+            typical = weights.most_common(1)[0][0]
+            # the line's extent is that of its ordinary runs: one tall run must
+            # not stretch it over the next line and chain them together
+            band = [r for r in main if r.height <= typical * 1.5] or main
+            top = min(r.top for r in band)
+            bottom = max(r.bottom for r in band)
+            # display type beside running text (a wraparound cover) is never one
+            # line; a note marker beside a large title is
+            if run.height > 2.2 * max(1.0, typical) or (
+                    typical > 2.2 * max(1.0, run.height) and len(run.text.strip()) > 4):
+                continue
             overlap = min(bottom, run.bottom) - max(top, run.top)
             if overlap >= 0.5 * min(run.height, bottom - top):
                 best = line
