@@ -9,9 +9,11 @@ scholarly books) into:
   Thorium) and link back to the text in every other reader.
 
 The PDF is first reconstructed into semantic HTML, with paragraphs, headings, notes,
-quotations, small caps, figures, bibliography and index recovered from Poppler's
-positioned text. Pandoc then writes both outputs from that one source, and each is
-validated against it and against the PDF's own text layer.
+quotations, lists, small caps, margin numbers, figures, bibliography and index recovered
+from Poppler's positioned text (after repairing fonts whose text map is wrong). Pandoc
+then writes both outputs from that one source. The HTML is checked against the PDF
+itself, for its words and for its structure, and each output is validated against the
+HTML.
 
 ## Use in Pi
 
@@ -25,7 +27,7 @@ skill directory. `SKILL.md` has the complete workflow.
 ## Pipeline
 
 ```text
-PDF ─ pdf_to_html.py ─> book.html ─ check_text.py (against the PDF)
+PDF ─ pdf_to_html.py ─> book.html ─ check_text.py + check_structure.py (against the PDF)
 book.html ─ pandoc ─> raw.docx ─ format_docx.py ─> final.docx ─ validate_docx.py
 book.html ─ pandoc ─> raw.epub ─ polish_epub.py ─> book.epub  ─ validate_epub.py + epubcheck
 ```
@@ -34,8 +36,10 @@ book.html ─ pandoc ─> raw.epub ─ polish_epub.py ─> book.epub  ─ valida
 
 | Script | Purpose |
 |---|---|
-| `scripts/pdf_to_html.py` | Reconstructs semantic HTML from the PDF and writes a JSON report of every decision to review (garbled fonts, removed running heads, headings, notes, hyphenation). |
+| `scripts/pdf_to_html.py` | Reconstructs semantic HTML from the PDF and writes a JSON report of every decision to review (garbled fonts, removed running heads, headings, bookmarks, notes, hyphenation, tables). |
+| `scripts/repair_text_layer.py` | Corrects fonts whose Unicode map contradicts their glyph names (wrong case, small caps) in a copy of the PDF; run automatically by `pdf_to_html.py`. |
 | `scripts/check_text.py` | Compares the HTML with `pdftotext` output to catch dropped, duplicated or glued text. |
+| `scripts/check_structure.py` | Checks the HTML's structure against the PDF: contents and bookmarks vs headings, bibliography and index sections, notes that swallowed text, note numbering, skipped pages and images, missing pages, language. |
 | `scripts/format_docx.py` | Applies book styles, chapter sections, per-chapter note numbering and custom note marks to Pandoc's DOCX without breaking Word's XML. |
 | `scripts/validate_docx.py` | Checks package integrity, schema order, footnotes, bookmarks and text. |
 | `scripts/polish_epub.py` | Normalises EPUB notes for pop-ups and back links, applies the printed labels, removes Pandoc's empty styles. |

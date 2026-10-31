@@ -118,6 +118,8 @@ CUSTOM_STYLES = {
     'Epigraph': {'ind': {'left': '1440', 'firstLine': '0'}, 'spacing': {'before': '0', 'after': '120'}, 'italic': True},
     'Epigraph Source': {'ind': {'left': '1440', 'firstLine': '0'}, 'jc': 'right', 'spacing': {'before': '0', 'after': '360'}},
     'Bibliography': {'ind': {'left': '720', 'hanging': '720'}, 'spacing': {'before': '0', 'after': '60'}},
+    'Hanging Entry': {'ind': {'left': '540', 'hanging': '540'}, 'spacing': {'before': '0', 'after': '60'}},
+    'Hanging Subentry': {'ind': {'left': '1080', 'hanging': '540'}, 'spacing': {'before': '0', 'after': '60'}},
     # Chicago style: runover lines are indented deeper than subentries.
     'Index Entry': {'ind': {'left': '720', 'hanging': '720'}, 'spacing': {'before': '0', 'after': '0'}},
     'Index Subentry': {'ind': {'left': '720', 'hanging': '360'}, 'spacing': {'before': '0', 'after': '0'}},
@@ -127,6 +129,7 @@ CUSTOM_STYLES = {
     'Dedication': {'ind': {'firstLine': '0'}, 'jc': 'center', 'italic': True, 'spacing': {'before': '2400', 'after': '0'}},
     'Copyright': {'ind': {'firstLine': '0'}, 'spacing': {'before': '0', 'after': '60'}},
     'Front Matter': {'ind': {'firstLine': '0'}, 'spacing': {'before': '0', 'after': '120'}},
+    'Marginal Number': {'bold': True, 'size': '16'},   # character style: section numbers
     # Pandoc's notes are body-size; books (and Word's own default) use 10 pt.
     'Footnote Text': {'spacing': {'before': '0', 'after': '60'}, 'size': '20'},
 }
@@ -259,7 +262,8 @@ def set_indent(ppr: ET.Element, **values: str) -> None:
 
 
 def apply_properties(style: ET.Element, props: dict) -> None:
-    ppr = child(style, 'pPr', STYLE_ORDER)
+    if any(key in props for key in ('keepNext', 'spacing', 'ind', 'jc')):
+        ppr = child(style, 'pPr', STYLE_ORDER)
     if props.get('keepNext'):
         child(ppr, 'keepNext', PPR_ORDER)
     if 'spacing' in props:
@@ -270,6 +274,10 @@ def apply_properties(style: ET.Element, props: dict) -> None:
         set_indent(ppr, **props['ind'])
     if 'jc' in props:
         child(ppr, 'jc', PPR_ORDER).set(w('val'), props['jc'])
+    if props.get('bold'):
+        rpr = child(style, 'rPr', STYLE_ORDER)
+        child(rpr, 'b', RPR_ORDER)
+        child(rpr, 'bCs', RPR_ORDER)
     if props.get('italic'):
         rpr = child(style, 'rPr', STYLE_ORDER)
         child(rpr, 'i', RPR_ORDER)

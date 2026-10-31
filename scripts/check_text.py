@@ -54,8 +54,12 @@ class HtmlWords(HTMLParser):
             self.chunks.append(data)
 
 
+URL = re.compile(r'(?:https?://|www\.)\S+')
+
+
 def counter(text: str) -> collections.Counter:
-    return collections.Counter(w.lower() for w in WORD.findall(unicodedata.normalize('NFC', text)))
+    text = URL.sub(' ', unicodedata.normalize('NFC', text))
+    return collections.Counter(w.lower() for w in WORD.findall(text))
 
 
 def pdf_pages(pdf: Path, first: int | None, last: int | None) -> list[tuple[int, str]]:
@@ -94,7 +98,8 @@ def main() -> None:
     report_path = args.report or args.html.with_suffix('.report.json')
     report = json.loads(report_path.read_text(encoding='utf-8')) if report_path.exists() else {}
     skipped = set(report.get('skipped_pages', []))
-    margin_words = counter(' '.join(report.get('margin_lines', [])))
+    margin_words = counter(' '.join(report.get('margin_lines', []) +
+                                    [r['text'] for r in report.get('rotated_text', [])]))
 
     pages = pdf_pages(args.pdf, args.first_page, args.last_page)
     where = collections.defaultdict(list)
@@ -126,7 +131,7 @@ def main() -> None:
         if word.isdigit():
             explained['numbers (folios, note markers, page ranges)'] += count
         elif margin_words[word] or (len(word) <= 3 and any(word in m for m in margin_words)):
-            explained['running heads and other margin text'] += count
+            explained['running heads, rotated and other margin text'] += count
         elif GARBLE.search(word) or len(word) == 1:
             explained['garbled or split extraction (font maps, letter-spaced heads)'] += count
         elif word in compounds:

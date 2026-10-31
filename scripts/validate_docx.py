@@ -260,6 +260,10 @@ def main() -> None:
             missing, extra = expected - actual, actual - expected
             total = sum(expected.values()) or 1
             facts.append(f'{label}: {total} source words, {sum(missing.values())} missing, {sum(extra.values())} extra')
+            if missing or extra:
+                facts.append('    ' + '; '.join(part for part in (
+                    'missing ' + ', '.join(f'{k}×{v}' for k, v in missing.most_common(8)) if missing else '',
+                    'extra ' + ', '.join(f'{k}×{v}' for k, v in extra.most_common(8)) if extra else '') if part))
             if sum(missing.values()) / total > 0.002:
                 errors.append(f'text-missing: {label}: ' + ', '.join(f'{k}×{v}' for k, v in missing.most_common(12)))
             if sum(extra.values()) / total > 0.002:

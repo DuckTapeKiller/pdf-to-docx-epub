@@ -148,6 +148,10 @@ def describe_diff(name: str, expected: collections.Counter, actual: collections.
     added = sum(extra.values())
     report.fact(f'{name}: {total} source words, {lost} missing, {added} extra '
                 f'({100 * (1 - lost / total):.2f}% of source words present)')
+    if lost or added:
+        report.fact('    ' + '; '.join(part for part in (
+            'missing ' + ', '.join(f'{w}×{n}' for w, n in missing.most_common(8)) if lost else '',
+            'extra ' + ', '.join(f'{w}×{n}' for w, n in extra.most_common(8)) if added else '') if part))
     if lost / total > 0.002:
         report.error(f'text-missing: {name}: words missing from the EPUB, e.g. '
                      + ', '.join(f'{w}×{n}' for w, n in missing.most_common(12)))
@@ -396,8 +400,9 @@ def main() -> None:
                     bucket.append(' ')
 
             walk(body, False)
-            body_words += words(' '.join(main_text))
-            note_words += words(' '.join(notes_text))
+            # inline elements do not break words ("P<span>anoptes</span>"); blocks add a space
+            body_words += words(''.join(main_text))
+            note_words += words(''.join(notes_text))
         describe_diff('body text', words(''.join(source.body)), body_words, report)
         describe_diff('note text', words(''.join(source.notes)), note_words, report)
 

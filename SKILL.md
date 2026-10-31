@@ -1,7 +1,7 @@
 ---
 name: pdf-to-docx-epub
 description: Convert book-length PDFs (monographs, edited volumes, scholarly books) into an editable Word DOCX with real footnotes and a reflowable EPUB 3 with pop-up footnotes, preserving headings, chapter authors, block quotations, italics and small caps, figures, bibliography and index. Use for PDF-to-DOCX, PDF-to-EPUB, DOCX-to-EPUB with working notes, or a complete PDF book conversion.
-compatibility: macOS or Linux with Python 3.9+ (standard library only), Pandoc 3.x, and Poppler (pdftohtml, pdftotext, pdftoppm). Optional - epubcheck, Calibre, LibreOffice, ocrmypdf for scanned PDFs.
+compatibility: macOS or Linux with Python 3.9+ (standard library only), Pandoc 3.x, and Poppler (pdftohtml, pdftotext, pdftoppm). Optional - epubcheck, Calibre, LibreOffice, ocrmypdf for scanned PDFs, mutool or qpdf for booklets.
 metadata:
   workflow: pdf-reconstruction-docx-epub
   validation: text-structure-footnote-and-package-validation
@@ -32,7 +32,9 @@ Requirements (macOS: `brew install pandoc poppler`; optional `brew install epubc
 Pipeline:
 
 ```text
-PDF ──pdf_to_html.py──> book.html (semantic, notes as epub:type) ──check_text.py (vs PDF)
+PDF ──pdf_to_html.py──> book.html (semantic, notes as epub:type)
+         (repairs the PDF's text layer first: repair_text_layer.py)
+book.html ──check_text.py + check_structure.py (both against the PDF itself)
 book.html ──pandoc──> raw.docx ──format_docx.py──> final.docx ──validate_docx.py
 book.html ──pandoc──> raw.epub ──polish_epub.py──> book.epub ──validate_epub.py + epubcheck
 (final.docx edited by the user ──pandoc -f docx+styles──> EPUB ──polish_epub.py──> same result)
@@ -53,7 +55,14 @@ pdftoppm -png -r 80 -f 15 -l 16 book.pdf page    # look at the pages themselves
 
 Record the page count, encryption, the pages of the cover, half-title, series page,
 title page, copyright page, printed contents and list of illustrations, and how notes,
-running heads and chapter openings look.
+running heads and chapter openings look. Note the book's language: set it in the config
+(`"lang": "es-ES"`); if you leave it out it is inferred from the text and printed, and
+`check_structure.py` fails when the declared language is not the language of the text.
+
+- Landscape pages holding two book pages side by side (a booklet, a 2-up scan) are read
+  left half, then right half (`two_up_pages` in the report). A booklet printed in
+  imposition order (last page beside the first) must be split and reordered first, e.g.
+  `mutool poster -x 2 book.pdf split.pdf` and `qpdf split.pdf --pages split.pdf 1,4,... -- ordered.pdf`.
 
 - No text layer (`pdftotext` returns nothing on most pages): run OCR first
   (`ocrmypdf -l eng+spa book.pdf ocr.pdf`), then work from `ocr.pdf`.
@@ -68,23 +77,34 @@ python3 "$SKILL_DIR/scripts/pdf_to_html.py" --pdf book.pdf --out book.html \
   --config config.json --media media
 ```
 
-It reads Poppler's positioned XML and writes `book.html` plus `book.report.json`.
+It first repairs the PDF's text layer in a temporary copy (`repair_text_layer.py`, also
+usable on its own): fonts whose Unicode map contradicts their own glyph names, the usual
+cause of lowercase headings ("capítulo 1" printed "CAPÍTULO 1") and of small capitals
+that extract as plain lowercase, are corrected from the glyph names (`--no-repair` skips
+this; `text_layer_repair` in the report lists every change). It then reads Poppler's
+positioned XML and writes `book.html` plus `book.report.json`.
+
 It measures the body, note and quotation sizes, margins, indent and line pitch, then:
-removes running heads, folios and printer slugs; reads two-column pages (indexes) column
-by column; joins paragraphs across lines and pages; repairs line-end hyphenation from the
-book's own vocabulary (keeping "Quispe-Agnoli", "Anglo-Norman"); restores spaces lost at
-font changes and after note markers; rejoins drop caps; detects chapters (with their
-"Chapter 1" label), sections (including small-caps and wrapped headings) and chapter
-authors; reads footnotes from the foot of each page, including notes continued on the
-next page, and links each to its marker; builds block quotations, bibliography and
-abbreviation lists (hanging indents), index entries, figures with captions and front
-matter; detects small-caps fonts; skips printed contents pages.
+removes running heads, folios and printer slugs (but keeps a title set high on its page
+in display type); reads two-column pages (indexes) column by column; joins paragraphs
+across lines and pages; repairs line-end hyphenation from the book's own vocabulary, the
+language's rules (Spanish and Portuguese repeat a real hyphen on the next line) and a
+word list (keeping "Quispe-Agnoli", "Anglo-Norman"); restores spaces lost at font
+changes, after note markers and after drop caps; drops text printed twice for a bold
+effect and rotated text (a spine); detects chapters (with their "Chapter 1" label),
+sections (including small-caps and wrapped headings) and chapter authors, following the
+PDF's own bookmarks when it has them; keeps section numbers printed in the margin;
+reads footnotes from the foot of each page, including notes continued on the next page,
+and links each to its marker, never letting a note run into an index or bibliography;
+builds block quotations, lists, bibliography and abbreviation lists (hanging indents),
+index entries (wrapped entries joined, small-caps headwords kept), figures with captions
+and front matter; skips printed contents pages and the cover page.
 
 Config keys you will use most:
 
 | key | use |
 |---|---|
-| `lang`, `title` | language (drives hyphenation in readers) and HTML title |
+| `lang`, `title` | language (drives hyphenation in readers and the hyphen rules) and HTML title; both are inferred when absent |
 | `skip_pages` | cover, half-title, series page, title page (Pandoc makes its own title page), blank pages |
 | `toc_pages` | printed contents pages, if not auto-detected (they are always skipped) |
 | `front_matter_until` | last PDF page of front matter, if the guess is wrong |
@@ -92,20 +112,30 @@ Config keys you will use most:
 | `smallcaps_fonts`, `heading_fonts` | force a font to small caps, or to heading level N (`"FAMILY@SIZE": 2`) |
 | `body_size`, `note_size`, `quote_sizes`, `header_band`, `footer_band` | override measurements |
 | `keep_hyphen_words`, `hanging_sections` | real compounds split at a line end; extra hanging-indent sections |
+| `dictionary` | a word list or Hunspell `.dic` for the book's language, to decide line-end hyphens (macOS has `/usr/share/dict/words` for English) |
+| `heading_patterns` | `{"regex": level}` for headings the type alone does not reveal |
+| `min_figure_area` | smallest image kept as a figure, as a share of the page (default 0.015) |
 
 ### Review loop (mandatory)
 
 Read the summary it prints and `book.report.json`, fix the config, re-run, until clean:
 
 1. `suspect_fonts`, `mixed_script_words`: garbled text; go to section 3.
-2. `headings`: compare with the printed contents page, level by level.
+   `text_layer_repair`: fonts corrected from their glyph names.
+2. `headings`: compare with the printed contents page, level by level. `outline`: the
+   PDF's bookmarks and which of them have a printed heading (a bookmark that only points
+   into running text, such as "Epítome 1", has none; that is fine).
 3. `chapter_authors`, `display_text`, `removed_margin_text`, `margin_lines`: nothing of
    the book proper may be in the removed lists.
 4. `notes`: `linked` must equal `found`; every `note_problems` entry must be resolved
    (a marker the script missed, a note continued oddly, a page wrongly treated as notes).
 5. `hyphen_guessed`: line-end hyphens removed without evidence; add real compounds to
-   `keep_hyphen_words`.
-6. `figures`, `images_skipped`, `two_column_pages`, `toc_pages_skipped`, `skipped_pages`.
+   `keep_hyphen_words`, or give a `dictionary`.
+6. `figures`, `images_skipped`, `cover_page`, `two_column_pages`, `two_up_pages`,
+   `toc_pages_skipped`, `skipped_pages`.
+7. `table_pages`: tables come out as lines of text; rebuild each as a `<table>` (with
+   its own notes, if it has a separate note series) or insert an image of it.
+8. `marginal_numbers`, `lists`, `sized_small_caps`, `rotated_text`, `overprinted_text`.
 
 Then compare with the PDF's own text layer:
 
@@ -116,8 +146,26 @@ python3 "$SKILL_DIR/scripts/check_text.py" --pdf book.pdf --html book.html
 It must exit 0: no GLUED words, no NOTE MARKERS followed by a letter, and every
 UNEXPLAINED word inspected on its PDF page (it lists the pages). Differences explained
 by running heads, folios, decoded fonts and pdftotext's own hyphen removal are fine.
-Finally spot-check a chapter opening, a page with a long note, a block quotation and the
-end of a chapter against `pdftoppm` renders.
+
+Then check the structure against the PDF:
+
+```sh
+python3 "$SKILL_DIR/scripts/check_structure.py" --pdf book.pdf --html book.html
+```
+
+The validators only compare files the pipeline wrote, so they cannot see a section that
+was never recognised. This check reads the PDF again and fails (ERROR) when a printed
+contents entry has no heading, when the PDF prints a bibliography or index that is not
+its own section with its entries in it, when a note holds an index or the text after it
+(the last note of a chapter swallowing what follows), when a page's words are mostly
+missing, when a page skipped as "contents" is really a table, or when the declared
+language is not the language of the text. WARN lines (bookmarks without a heading, note
+numbers that jump, large images skipped, table pages, headings that read like body text)
+each need a look at the page. Resolve every ERROR; explain every WARN you accept.
+
+Finally spot-check a chapter opening, a page with a long note, a block quotation, the
+start of the bibliography and of the index, and the end of a chapter against `pdftoppm`
+renders.
 
 ## 3. Garbled fonts
 
@@ -177,13 +225,19 @@ macOS Preview "Export as PDF" can lose correct text that the original still has.
   | `indent` | `Body Text` | indented new paragraph after a block quotation |
   | `chapter-author` | `Chapter Author` | contributor's name under a chapter title |
   | `bibliography` | `Bibliography` | hanging-indent entries (also abbreviation lists) |
+  | `hanging`, `hanging-sub` | `Hanging Entry`, `Hanging Subentry` | numbered entries that are not a list (a chronology), and their sub-entries |
   | `index`, `index-sub`, `index-letter` | `Index Entry`, `Index Subentry`, `Index Letter` | index |
   | `epigraph`, `epigraph-source`, `dedication` | `Epigraph`, `Epigraph Source`, `Dedication` | front matter, chapter openings |
   | `centered`, `right`, `front-matter` | `Centered`, `Right`, `Front Matter` | title, copyright and other front matter |
 
 - `<blockquote><p>` for quotations, `<figure><img alt="..." /><figcaption>` for figures,
-  `<i>`/`<b>`, `<span class="smallcaps">` for small caps (body text keeps the lowercase
-  letters the font set as small capitals).
+  `<ol start="n">`/`<ul>` with `<li><p>` for lists, `<i>`/`<b>`,
+  `<span class="smallcaps">` for small caps (the text keeps the letters' real case:
+  "Abante" for a capital A followed by small capitals), `<span dir="rtl">` for Hebrew or
+  Arabic words in a left-to-right text.
+- Section or line numbers printed in the margin (classical texts, editions) are kept where
+  the section starts: `<span class="marginal" data-custom-style="Marginal Number">35</span>`
+  (floated into the margin in the EPUB, a small bold number in Word).
 
 ## 5. Metadata and cover
 
@@ -276,7 +330,7 @@ Report exactly which of these ran:
 
 1. `pdf_to_html.py` report reviewed: no suspect fonts left, notes linked = found, no
    unresolved note problems, headings match the printed contents.
-2. `check_text.py` exits 0.
+2. `check_text.py` exits 0, and `check_structure.py` exits 0 with every WARN explained.
 3. `validate_docx.py` exits 0 (ZIP, XML, content types, relationships, mc:Ignorable
    prefixes, schema order, footnotes vs source, bookmarks, TOC field, text vs source).
 4. `validate_epub.py` exits 0 (package, metadata, links, notes in both directions,
@@ -297,7 +351,10 @@ Report exactly which of these ran:
 | Index read across columns | two-column page not detected | `two_column_pages`; set `skip_pages` or fix by hand |
 | Bibliography entry per line | heading not recognised as bibliography | add its text to `hanging_sections` |
 | Vector figures missing | `pdftohtml` extracts raster images only | render the area with `pdftoppm -x -y -W -H` and insert a `<figure>` |
-| Tables flattened into paragraphs | no table reconstruction | rebuild as `<table>` by hand |
+| Tables flattened into paragraphs | no table reconstruction | `table_pages` lists them; rebuild as `<table>` by hand |
+| Note numbers jump (70 → 1) in a chapter | a table with its own note series | rebuild the table and link its notes by hand |
+| Page halves in the wrong order | booklet printed in imposition order | split and reorder the pages first (section 1) |
+| Headings missing, bookmarks present | headings in body type | `outline` in the report; they are followed automatically when they match |
 | Index page numbers meaningless | reflowable EPUB has no pages | keep (fidelity) or drop the index on the user's instruction |
 | Calibre "Unexpected empty source" | empty `<style>` from Pandoc | `polish_epub.py` |
 | Calibre "Expected selector ... to come before" | CSS specificity order | keep generic selectors first, as `assets/epub.css` does |
@@ -308,4 +365,5 @@ Report exactly which of these ran:
 
 Give the DOCX and EPUB paths, the gates that ran and their results, what could not be
 tested, and anything that needs the user's eye (decoded fonts, unresolved notes, figures
-or tables rebuilt by hand, pages deliberately skipped).
+or tables rebuilt by hand, pages deliberately skipped, hyphens guessed without evidence,
+the language if it was inferred).
