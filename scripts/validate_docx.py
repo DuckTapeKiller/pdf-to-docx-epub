@@ -89,8 +89,9 @@ class SourceText(HTMLParser):
             self._aside -= 1
         elif tag == 'a':
             self._ref = False
-        if tag in {'p', 'div', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'figcaption', 'aside'}:
-            self.handle_data(' ')
+        if tag in {'p', 'div', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'figcaption', 'aside',
+                   'td', 'th', 'tr', 'caption'}:
+            self.handle_data(' ')   # table cells are separate paragraphs in Word
 
     def handle_data(self, data):
         if self._skip or self._ref:

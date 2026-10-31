@@ -90,8 +90,9 @@ in display type); reads two-column pages (indexes) column by column; joins parag
 across lines and pages; repairs line-end hyphenation from the book's own vocabulary, the
 language's rules (Spanish and Portuguese repeat a real hyphen on the next line) and a
 word list (keeping "Quispe-Agnoli", "Anglo-Norman"); restores spaces lost at font
-changes, after note markers and after drop caps; drops text printed twice for a bold
-effect and rotated text (a spine); detects chapters (with their "Chapter 1" label),
+changes, after note markers and after drop caps; keeps only what lies inside each page's
+crop box (a printer's PDF also carries slug lines, crop marks and, on page 1, the whole
+cover spread); drops text printed twice for a bold effect and rotated text (a spine); detects chapters (with their "Chapter 1" label),
 sections (including small-caps and wrapped headings) and chapter authors, following the
 PDF's own bookmarks when it has them; keeps section numbers printed in the margin;
 reads footnotes from the foot of each page, including notes continued on the next page,
@@ -235,6 +236,13 @@ macOS Preview "Export as PDF" can lose correct text that the original still has.
   `<span class="smallcaps">` for small caps (the text keeps the letters' real case:
   "Abante" for a capital A followed by small capitals), `<span dir="rtl">` for Hebrew or
   Arabic words in a left-to-right text.
+- Tables (the report's `table_pages`) are rebuilt by hand from the page, with word
+  positions from `pdftotext -tsv -f N -l N book.pdf -`: a `<table>` with `<caption>`,
+  `<thead>` and `<tbody>`, wrapped in `<div class="table" data-custom-style="Table Block">`,
+  followed by its own notes in `<div class="table-notes" data-custom-style="Table Note">`.
+  A table's note markers are `<span class="not-a-note"><sup>1</sup></span>`: they are not
+  footnotes of the chapter, and their notes sit right below the table. Remove the
+  flattened rows and any table notes the script took for chapter notes.
 - Section or line numbers printed in the margin (classical texts, editions) are kept where
   the section starts: `<span class="marginal" data-custom-style="Marginal Number">35</span>`
   (floated into the margin in the EPUB, a small bold number in Word).
@@ -259,9 +267,11 @@ toc-title: Contents
 ---
 ```
 
-Cover: prefer the publisher's cover file. Otherwise render the cover page and crop the
-front panel if page 1 is a spread (look at the render first):
-`pdftoppm -jpeg -jpegopt quality=90 -r 200 -f 1 -l 1 [-x X -y Y -W W -H H] -singlefile book.pdf cover`.
+Cover: prefer the publisher's cover file. Otherwise render the cover page with
+`-cropbox` (a printer's PDF puts the whole wraparound cover in the media box and only
+the front panel in the crop box), and crop the front panel by hand if page 1 is still a
+spread (look at the render first):
+`pdftoppm -cropbox -jpeg -jpegopt quality=90 -r 240 -f 1 -l 1 [-x X -y Y -W W -H H] -singlefile book.pdf cover`.
 Do not pass an image extracted by `pdfimages`/`pdftohtml` directly: those JPEGs often
 lack a JFIF header and Pandoc cannot read their size. Aim for at least 1400 px wide.
 

@@ -391,9 +391,15 @@ def main() -> None:
     html_words = collections.Counter(w.lower() for w in re.findall(r'\w+', ' '.join(book.body + [n['text'] for n in book.notes])))
     pdf_counts = collections.Counter()
     page_words = {}
+    hidden = collections.defaultdict(collections.Counter)   # text outside the visible page
+    for item in report.get('outside_crop_box', []) + report.get('rotated_text', []):
+        hidden[item['page']].update(w.lower() for w in re.findall(r'[^\W\d_]{5,}', item['text']))
     for number, text in pages.items():
         text = re.sub(r'(\w)-\n(\w)', r'\1\2', text)
         words = [w.lower() for w in re.findall(r'[^\W\d_]{5,}', text)]
+        if hidden[number]:
+            left = collections.Counter(words) - hidden[number]
+            words = list(left.elements())
         page_words[number] = words
         pdf_counts.update(words)
     thin = []

@@ -159,6 +159,12 @@ table {
   font-size: 0.9em;
 }
 
+caption {
+  font-size: 0.95em;
+  text-align: left;
+  margin-bottom: 0.4em;
+}
+
 th,
 td {
   padding: 0.2em 0.5em;
@@ -265,6 +271,12 @@ hr {
   padding-left: 3em;
   text-align: left;
   margin-bottom: 0.35em;
+}
+
+.table-notes p {
+  font-size: 0.8em;
+  text-indent: 0;
+  text-align: left;
 }
 
 .index p {

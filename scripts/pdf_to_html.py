@@ -411,6 +411,64 @@ def read_outline(root) -> list[dict]:
     return entries
 
 
+def page_boxes(pdf: Path, pages: int) -> dict[int, dict]:
+    """Media box, crop box and rotation of every page (pdfinfo -box)."""
+    if shutil.which('pdfinfo') is None or not pages:
+        return {}
+    result = subprocess.run(['pdfinfo', '-box', '-f', '1', '-l', str(pages), str(pdf)],
+                            capture_output=True, text=True, errors='replace')
+    boxes: dict[int, dict] = collections.defaultdict(dict)
+    for line in result.stdout.splitlines():
+        match = re.match(r'Page\s+(\d+)\s+(MediaBox|CropBox):\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)', line)
+        if match:
+            boxes[int(match.group(1))][match.group(2)] = tuple(float(v) for v in match.group(3, 4, 5, 6))
+        match = re.match(r'Page\s+(\d+)\s+rot:\s+(\d+)', line)
+        if match:
+            boxes[int(match.group(1))]['rot'] = int(match.group(2))
+    return boxes
+
+
+def crop_to_visible(pages: dict[int, dict], boxes: dict[int, dict], report: Report) -> None:
+    """Keep only what the page shows: Poppler reads the whole media box, so a
+    printer's PDF yields its slug lines, crop marks and, on a wraparound
+    cover, the back cover and spine.  Coordinates move to the crop box."""
+    cut = 0
+    for number, info in pages.items():
+        box = boxes.get(number, {})
+        media, crop = box.get('MediaBox'), box.get('CropBox')
+        if not media or not crop or box.get('rot', 0) % 360 or all(abs(a - b) <= 1 for a, b in zip(media, crop)):
+            continue
+        sx = info['width'] / max(media[2] - media[0], 1)
+        sy = info['height'] / max(media[3] - media[1], 1)
+        left, right = (crop[0] - media[0]) * sx, (crop[2] - media[0]) * sx
+        top, bottom = (media[3] - crop[3]) * sy, (media[3] - crop[1]) * sy
+
+        def inside(x: float, y: float) -> bool:
+            return left - 2 <= x <= right + 2 and top - 2 <= y <= bottom + 2
+
+        kept, outside = [], []
+        for run in info['runs']:
+            if inside(run.left + run.width / 2, run.top + run.height / 2):
+                run.left -= left
+                run.top -= top
+                kept.append(run)
+            elif run.text.strip():
+                outside.append(run.text.strip())
+        images = []
+        for image in info['images']:
+            if inside(image['left'] + image['width'] / 2, image['top'] + image['height'] / 2):
+                image['left'] -= left
+                image['top'] -= top
+                images.append(image)
+        info['runs'], info['images'] = kept, images
+        info['width'], info['height'] = right - left, bottom - top
+        if outside:
+            cut += len(outside)
+            report.add('outside_crop_box', {'page': number, 'text': ' '.join(outside)})
+    if cut:
+        print(f'  {cut} text run(s) outside the visible page (crop box) left out: slugs, crop marks, cover spread')
+
+
 def pdf_title(pdf: Path) -> str:
     if shutil.which('pdfinfo') is None:
         return ''
@@ -1911,6 +1969,8 @@ def is_table(lines: list[Line], geometry: dict) -> bool:
         if line.kind == 'margin':
             continue
         runs = [r for r in line.runs if r.text.strip()]
+        if any(r.rtl for r in runs):
+            continue    # right-to-left words stand apart like cells; they are text
         text = ''.join(r.text for r in runs)
         gaps = sum(1 for a, b in zip(runs, runs[1:]) if b.left - a.right > max(geometry['indent'], a.size * 1.5))
         gaps += len(re.findall(r'\S {4,}(?=\S)', text))
@@ -2149,6 +2209,7 @@ def main() -> None:
         source = args.pdf if args.no_repair else repair_text_layer(args.pdf, Path(tmp), report)
         xml_path = run_pdftohtml(source, Path(tmp), args.media, args.first_page, args.last_page)
         fonts, pages, outline = load_layout(xml_path, config, report)
+        crop_to_visible(pages, page_boxes(source, max(pages) if pages else 0), report)
         reference = reference_words(source, args.first_page, args.last_page)
     title = config['title'] or pdf_title(args.pdf)
     if not config['title'] and title:
