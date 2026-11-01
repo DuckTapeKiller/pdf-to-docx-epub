@@ -19,7 +19,7 @@ drop pages because they are hard to extract, and never call an output complete,
 `SKILL_DIR` below means the directory that contains this `SKILL.md`; set it first:
 
 ```sh
-SKILL_DIR="/absolute/path/to/pdf-to-docx-epub"
+SKILL_DIR="/absolute/path/to/pi-pdf-to-docx-epub"
 ```
 
 Requirements (macOS: `brew install pandoc poppler`; optional `brew install epubcheck`):
