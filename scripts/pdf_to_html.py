@@ -85,6 +85,10 @@ DEFAULT_CONFIG = {
     'header_band': None, 'footer_band': None,  # y limits in pdftohtml units
     'superscript_ratio': 0.75,   # max size ratio of a note marker to its line
     'keep_hyphen_words': [],     # compounds whose line-end hyphen is real
+    'indent': None,              # paragraph indent in the report's units, when the measured one is wrong
+    'per_page_margin': False,    # measure the left margin on each page (a scan that shifts page by page)
+    'chapter_title_caps': False, # capitals right after a chapter label are the rest of its title (scans)
+    'replacements': [],          # [["old", "new"], ...]: exact corrections applied to the finished HTML
     'hanging_sections': [],      # extra heading texts whose entries use hanging indents
     'min_figure_area': 0.015,    # smallest raster image kept as a figure (share of the page)
     'dictionary': None,          # word list for hyphenation evidence (default for English: /usr/share/dict/words)
@@ -299,6 +303,15 @@ def load_layout(xml_path: Path, config: dict, report: Report):
     raw = xml_path.read_bytes().decode('utf-8', 'replace')
     raw = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', raw)
     raw = re.sub(r'<!DOCTYPE[^>]*>', '', raw)
+
+    def well_nested(match: re.Match) -> str:
+        # Poppler can misnest <b> and <i> on OCR text, which no XML parser accepts
+        try:
+            ET.fromstring(f'<t>{match[2]}</t>')
+            return match[0]
+        except ET.ParseError:
+            return match[1] + re.sub(r'</?[bi]>', '', match[2]) + '</text>'
+    raw = re.sub(r'(<text\b[^>]*>)(.*?)</text>', well_nested, raw, flags=re.S)
     root = ET.fromstring(raw)
     fonts: dict[str, tuple[int, str]] = {}
     pages: dict[int, dict] = {}
@@ -340,6 +353,7 @@ def load_layout(xml_path: Path, config: dict, report: Report):
                     for part, marked in split_smallcaps(piece):
                         part_text = ''.join(mapping.get(c, c) for c in part) if mapping else part
                         part_text = clean_text(part_text)
+                        part_text = re.sub(r'¬\s*$', '\u00ad', part_text)   # a scan's line-end hyphen
                         run = Run(part_text, node.get('font'), size, family, italic, bold,
                                   left + width * offset / total, top, width * len(part) / total, height)
                         run.smallcaps = font_smallcaps or marked
@@ -1622,7 +1636,7 @@ def build_blocks(all_lines, geometry, config, report: Report, images: dict | Non
                  outline_active: bool = False):
     images = images or {}
     body_size = geometry['body_size']
-    pitch, indent = geometry['pitch'], geometry['indent']
+    pitch, indent = geometry['pitch'], config['indent'] or geometry['indent']
     quote_sizes = set(geometry['quote_sizes'])
     heading_fonts = config['heading_fonts']
     skip = set(config['skip_pages'])
@@ -1697,6 +1711,8 @@ def build_blocks(all_lines, geometry, config, report: Report, images: dict | Non
             if id(line) in captions:
                 continue
             margin = geometry['margin'].get(number % 2, geometry['margin'].get(0, 0))
+            if config['per_page_margin'] and content:
+                margin = collections.Counter(round(l.left / 12) for l in content).most_common(1)[0][0] * 12
             gap_before = (line.top - content[index - 1].bottom) if index else None
             if line.outline is not None:
                 # a heading the PDF's bookmarks point to: their level, their extent
@@ -2128,6 +2144,7 @@ def render(blocks, notes, all_lines, geometry, vocab, config, report: Report, me
                 pieces.append(runs_to_html(assemble(group, vocab, config, report)))
             style = {'centered': ('centered', 'Centered'), 'right': ('right', 'Right')}.get(block.css)
             body = '<br />'.join(p for p in pieces if p)
+            body = body.replace('\u00ad<br />', '')
             if style:
                 out.append(f'<div class="{style[0]}" data-custom-style="{style[1]}"><p>{body}</p></div>')
             else:
@@ -2176,10 +2193,57 @@ def render(blocks, notes, all_lines, geometry, vocab, config, report: Report, me
 
 # --------------------------------------------------------------------------
 
+def join_caps_titles(text: str, report: Report) -> str:
+    """A wrapped title set in body type comes out as loose blocks after its "Chapter 3" label."""
+    block = re.compile(r'\s*(?:<div[^>]*>)?<(p|h2)[^>]*>(.*?)</\1>(?:</div>)?', re.S)
+    out, last = [], 0
+    label = r'((?:libro|book|parte?|part|cap[ií]tulo|chapter|chapitre|kapitel|capitolo)\s+[\dIVXLCivxlc]+)'
+    for m in re.finditer(r'<h1 id="([^"]+)">' + label + r'</h1>', text, flags=re.I):
+        pieces, end = [], m.end()
+        while True:
+            b = block.match(text, end)
+            if not b:
+                break
+            plain = re.sub(r'<[^>]+>', '', b[2]).strip()
+            letters = re.sub(r'[\W\d_]', '', plain)
+            if not letters or re.fullmatch(r'[IVXLC]+', plain) or sum(c.isupper() for c in letters) < len(letters) * .7:
+                break
+            pieces.append(plain)
+            end = b.end()
+        if pieces:
+            out.append(text[last:m.start()])
+            out.append(f'<h1 id="{m[1]}"><span class="chapter-label">{m[2]}</span><br />{" ".join(pieces).upper()}</h1>')
+            last = end
+            report.add('chapter_titles_joined', m[2])
+    out.append(text[last:])
+    return ''.join(out)
+
+
+def finish_html(text: str, config: dict, report: Report) -> str:
+    """Last corrections, on the finished markup."""
+    # a word divided across two blocks by a scan's line-end mark
+    text = re.sub(r'\u00ad</p>(?:</div>)?\n(?:<div[^>]*>)?<p>(?=[a-zà-ÿ])', '', text)
+    # a word divided across what looks like two bibliography or index entries
+    joins_syllables = (config['lang'] or '').lower()[:2] in ('es', 'pt')
+
+    def rejoin(m: re.Match) -> str:
+        tags = '' if m[2] and m[3] else (m[2] or '') + (m[3] or '')
+        return m[1] + ('' if joins_syllables else '-') + tags
+    text = re.sub(r'([^\W\d_])-(</i>)?</p></div>\n<div class="(?:bibliography|index|index-sub|hanging)"[^>]*><p>(<i>)?(?=[a-zà-ÿ])', rejoin, text)
+    if config['chapter_title_caps']:
+        text = join_caps_titles(text, report)
+    text = re.sub(r'———(?:\s|-)*(?=\S)', '——— ', text)     # a rule standing for a repeated author
+    for old, new in config['replacements']:
+        if old not in text:
+            report.add('replacements_unused', old)
+        text = text.replace(old, new)
+    return text
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
-    parser.add_argument('--pdf', required=True, type=Path)
-    parser.add_argument('--out', required=True, type=Path, help='book HTML to write')
+    parser.add_argument('--pdf', required='--print-config' not in sys.argv, type=Path)
+    parser.add_argument('--out', required='--print-config' not in sys.argv, type=Path, help='book HTML to write')
     parser.add_argument('--config', type=Path, help='JSON config (see DEFAULT_CONFIG in this script)')
     parser.add_argument('--report', type=Path, help='JSON report (default: OUT with .report.json)')
     parser.add_argument('--media', type=Path, help='directory for extracted raster images (default: no images)')
@@ -2296,6 +2360,7 @@ def main() -> None:
     media_rel = Path(os.path.relpath(args.media.resolve(), args.out.resolve().parent)).as_posix() if args.media else None
     html_text = render(blocks, notes, all_lines, geometry, vocab, config, report, media_rel, pages)
 
+    html_text = finish_html(html_text, config, report)
     args.out.write_text(html_text, encoding='utf-8')
     report_path = args.report or args.out.with_suffix('.report.json')
     data = dict(report.data)

@@ -1,7 +1,7 @@
 # PDF to DOCX and EPUB conversion skill
 
 A Pi skill and scripts for converting book-length PDFs (monographs, edited volumes,
-scholarly books) into:
+scholarly books), including scans and two-page spreads, into:
 
 - an editable DOCX with real Word footnotes, book paragraph styles, chapters on new pages
   and note numbers that restart per chapter like the print edition; and
@@ -36,6 +36,8 @@ book.html ─ pandoc ─> raw.epub ─ polish_epub.py ─> book.epub  ─ valida
 
 | Script | Purpose |
 |---|---|
+| `scripts/scan_to_pdf.py` | For scans: splits two-page spreads, straightens the pages, reads them with Apple Vision and Tesseract, votes word by word, takes note markers, type sizes, italics and figures from the pixels, and writes a PDF the other scripts can read, plus sheets of what is still in doubt. |
+| `scripts/vision_ocr.swift`, `scripts/spell_check.swift` | Its helpers on macOS, built on first use. |
 | `scripts/pdf_to_html.py` | Reconstructs semantic HTML from the PDF and writes a JSON report of every decision to review (garbled fonts, removed running heads, headings, bookmarks, notes, hyphenation, tables). |
 | `scripts/repair_text_layer.py` | Corrects fonts whose Unicode map contradicts their glyph names (wrong case, small caps) in a copy of the PDF; run automatically by `pdf_to_html.py`. |
 | `scripts/check_text.py` | Compares the HTML with `pdftotext` output to catch dropped, duplicated or glued text. |
@@ -46,12 +48,14 @@ book.html ─ pandoc ─> raw.epub ─ polish_epub.py ─> book.epub  ─ valida
 | `scripts/validate_epub.py` | Checks package, links, notes in both directions, labels, TOC and text (complements epubcheck). |
 | `assets/epub.css` | Reflowable book stylesheet. |
 
-The scripts use only the Python 3 standard library.
+The Python scripts use only the standard library.
 
 ## Requirements
 
 Python 3.9+, Pandoc 3.x and Poppler (macOS: `brew install pandoc poppler`).
-Optional: epubcheck, Calibre, LibreOffice, and ocrmypdf for scanned PDFs.
+Scanned books also need ImageMagick and Tesseract (`brew install imagemagick tesseract tesseract-lang`),
+and read best on macOS with the Xcode command line tools, for Apple Vision and the spell checker.
+Optional: epubcheck, Calibre, LibreOffice.
 
 ## Scope
 

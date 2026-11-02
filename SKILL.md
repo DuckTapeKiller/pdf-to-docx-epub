@@ -1,7 +1,7 @@
 ---
 name: pdf-to-docx-epub
-description: Convert book-length PDFs (monographs, edited volumes, scholarly books) into an editable Word DOCX with real footnotes and a reflowable EPUB 3 with pop-up footnotes, preserving headings, chapter authors, block quotations, italics and small caps, figures, bibliography and index. Use for PDF-to-DOCX, PDF-to-EPUB, DOCX-to-EPUB with working notes, or a complete PDF book conversion.
-compatibility: macOS or Linux with Python 3.9+ (standard library only), Pandoc 3.x, and Poppler (pdftohtml, pdftotext, pdftoppm). Optional - epubcheck, Calibre, LibreOffice, ocrmypdf for scanned PDFs, mutool or qpdf for booklets.
+description: Convert book-length PDFs (monographs, edited volumes, scholarly books), including scans and two-page spreads, into an editable Word DOCX with real footnotes and a reflowable EPUB 3 with pop-up footnotes, preserving headings, chapter authors, block quotations, italics and small caps, figures, bibliography and index. Use for PDF-to-DOCX, PDF-to-EPUB, DOCX-to-EPUB with working notes, or a complete PDF book conversion.
+compatibility: macOS or Linux with Python 3.9+ (standard library only), Pandoc 3.x, and Poppler (pdftohtml, pdftotext, pdftoppm). Scanned books also need ImageMagick and Tesseract, and read best on macOS, which adds Apple Vision and the system spell checker. Optional - epubcheck, Calibre, LibreOffice, mutool or qpdf for booklets.
 metadata:
   workflow: pdf-reconstruction-docx-epub
   validation: text-structure-footnote-and-package-validation
@@ -28,6 +28,9 @@ Requirements (macOS: `brew install pandoc poppler`; optional `brew install epubc
   back link inside EPUB notes; `polish_epub.py` restores both, so always run it.
 - Poppler: `pdfinfo`, `pdffonts`, `pdftohtml`, `pdftotext`, `pdftoppm`, `pdfimages`.
 - Python 3 standard library only. Use a scratch working directory for each book.
+- Scanned books (section 1b): `brew install imagemagick tesseract tesseract-lang`. On macOS,
+  `xcode-select --install` as well, so `swiftc` can build the helpers for Apple Vision and
+  the spell checker.
 
 Pipeline:
 
@@ -38,6 +41,7 @@ book.html ──check_text.py + check_structure.py (both against the PDF itself)
 book.html ──pandoc──> raw.docx ──format_docx.py──> final.docx ──validate_docx.py
 book.html ──pandoc──> raw.epub ──polish_epub.py──> book.epub ──validate_epub.py + epubcheck
 (final.docx edited by the user ──pandoc -f docx+styles──> EPUB ──polish_epub.py──> same result)
+a scan first goes through: PDF ──scan_to_pdf.py──> text_layer.pdf, which pdf_to_html.py then reads
 ```
 
 Why Pandoc and not `ebook-convert book.pdf`: Calibre's own manual ranks PDF last as an
@@ -64,10 +68,66 @@ running heads and chapter openings look. Note the book's language: set it in the
   imposition order (last page beside the first) must be split and reordered first, e.g.
   `mutool poster -x 2 book.pdf split.pdf` and `qpdf split.pdf --pages split.pdf 1,4,... -- ordered.pdf`.
 
-- No text layer (`pdftotext` returns nothing on most pages): run OCR first
-  (`ocrmypdf -l eng+spa book.pdf ocr.pdf`), then work from `ocr.pdf`.
 - Fonts with `uni no` or `Custom` encoding, or a PDF re-saved by macOS Preview
   ("Quartz PDFContext" producer), often extract as garbage (section 3).
+- A scan: `pdfimages -list` shows one full-page image per page, whether or not there is a
+  text layer, and `pdffonts` shows a single font or none. Go to section 1b first. Do not
+  give a scan straight to `pdf_to_html.py`: it finds no type sizes, italics or note markers.
+
+## 1b. Scanned books
+
+`scan_to_pdf.py` rebuilds the book from the page images: it splits two-page spreads at the
+gutter, straightens each page, reads it with two engines (Apple Vision and Tesseract), votes
+word by word with the old text layer and the spell checker as tie-breakers, and takes from
+the pixels what no engine reports: note rules, raised markers, type sizes, italics, figures
+and rules standing for a repeated author. It writes `text_layer.pdf`, which the rest of this
+skill reads like any other PDF.
+
+```sh
+python3 "$SKILL_DIR/scripts/scan_to_pdf.py" --pdf book.pdf --work /abs/path/scan --lang es --skip 1 --sheets
+```
+
+`--skip` leaves out the cover (take the cover image from `scan/img/`). A whole book takes a
+long time, so run it in the background (`nohup ... > scan.log 2>&1 &`) and read the log.
+Later runs reuse what is in `--work`, so keep that folder. `--only 40-50` tries a few PDF
+pages first.
+
+Then work through the summary it prints:
+
+1. **Engines.** The first line must say `tesseract + vision`. `tesseract ONLY` or `no spell
+   checker` means nothing could catch most misreadings: say so in the final response.
+2. **Sheets.** Read every sheet in `scan/review/` with the read tool. Each crop is labelled
+   `number: first reading | second reading | old text`, or `(numeral)`, `(volume?)`,
+   `(unvouched)` or `(no engine)`. The labels are hints; the crop decides. For each crop whose
+   first reading is wrong, write the text as printed, without its note marker, in a JSON file
+   of `{"12": "II:", "47": ""}`, where `""` deletes (a speck, or a marker read as a word).
+   Keep the book's own misprints: the page is the source, and `(unvouched)` words are often
+   printed that way. Then run the same command with
+   `--answers answers.json --accept-rest`, which keeps the first reading of every crop not
+   listed, and repeat until `still to read: 0`.
+3. **`pages where markers = notes`** must cover every page. A `PROBLEM` line names the page;
+   look at it and repair the note in `book.html` after step 5 (a `?` marks a marker it could
+   not number). Many `raised shapes ignored on pages without notes` means this book's notes
+   have no rule above them, which the script cannot yet separate: say so.
+4. **`figures kept`.** Look at the crops in `scan/figures/`. A false one is removed by adding
+   its id with `""` to the answers. Pictures the script missed are inserted by hand.
+5. **Reconstruct.** Edit `scan/config.json`, which already holds the bands, language and title
+   joining the book needs: add `title`, `toc_pages` and `front_matter_until`, with page numbers
+   from `scan/pages.tsv`, and `heading_patterns` for the headings in `lines_in_capitals` in
+   `scan/report.json` (front and back matter). Then follow section 2 with
+   `--pdf scan/text_layer.pdf --config scan/config.json`, and run `check_text.py` and
+   `check_structure.py` against `scan/text_layer.pdf`. Put later corrections in `replacements`
+   in the config, not in `book.html`, so they survive a re-run.
+6. **Audit.** Add `--audit 8` to write random pages to `scan/audit/`: the page image and its
+   text. Compare them word by word. It is the only check that can see what both engines
+   misread, because every other check compares against the same reading. An error found here
+   usually has siblings, so search the book for its class, then audit new pages.
+
+`book.searchable.pdf` in the same folder (or `--out`) has the page images under the corrected
+text, one book page per PDF page. Give it to the user as well.
+
+Not handled: pages scanned sideways, booklets in imposition order, and tables, which come out
+as lines of text as in section 4. Report anything left open.
 
 ## 2. Reconstruct the HTML
 
@@ -116,6 +176,9 @@ Config keys you will use most:
 | `dictionary` | a word list or Hunspell `.dic` for the book's language, to decide line-end hyphens (macOS has `/usr/share/dict/words` for English) |
 | `heading_patterns` | `{"regex": level}` for headings the type alone does not reveal |
 | `min_figure_area` | smallest image kept as a figure, as a share of the page (default 0.015) |
+| `per_page_margin`, `indent` | measure the left margin on each page, and set the paragraph indent, when text blocks shift from page to page |
+| `chapter_title_caps` | capitals right after a "Chapter 3" label are the rest of its title |
+| `replacements` | `[["old", "new"], ...]`: exact corrections applied to the finished HTML, listed in the report when they match nothing |
 
 ### Review loop (mandatory)
 
@@ -338,6 +401,8 @@ Word footnotes become EPUB notes, Word styles become the same classes, and custo
 
 Report exactly which of these ran:
 
+0. For a scan, `scan_to_pdf.py`: both engines ran, markers match notes on every page,
+   `still to read: 0`, and the audit pages were compared and how many errors they held.
 1. `pdf_to_html.py` report reviewed: no suspect fonts left, notes linked = found, no
    unresolved note problems, headings match the printed contents.
 2. `check_text.py` exits 0, and `check_structure.py` exits 0 with every WARN explained.

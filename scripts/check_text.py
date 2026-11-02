@@ -72,7 +72,7 @@ def pdf_pages(pdf: Path, first: int | None, last: int | None) -> list[tuple[int,
     start = first or 1
     pages = []
     for offset, page in enumerate(text.split('\f')):
-        page = unicodedata.normalize('NFC', page.replace('­\n', '').replace('­', ''))
+        page = unicodedata.normalize('NFC', page.replace('­\n', '').replace('­', '').replace('¬\n', ''))
         # "Sala-\nMolins" keeps its hyphen; a margin number may sit between the halves
         number = r'(?:\d{1,4}[a-z]?|[IVXLC]{1,6})(?:/\S+)?'
         page = re.sub(rf'(\w)-(?:[ \t]+{number})?[ \t]*\n(?:[ \t]*{number}[ \t]*\n)*([a-zà-ÿ])', r'\1\2', page)
